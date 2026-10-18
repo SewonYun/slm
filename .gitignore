@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Data and training outputs (large, reproducible)
+data/*
+!data/.gitkeep
+checkpoints/
+*.pt
+*.bin
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
