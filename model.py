@@ -3,6 +3,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class Head(nn.Module):
+    """self-attention head 1개"""
+
+    def __init__(self, n_embd: int, head_size: int, block_size: int):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        # register_buffer: 모델에 붙어 다니지만 학습은 안 되는 텐서
+        # (model.to("mps") 하면 같이 옮겨지고, parameters()엔 안 들어감)
+        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
+
+    def forward(self, x):
+        B, T, C = x.shape
+        k = self.key(x)    # (B, T, head_size)
+        q = self.query(x)  # (B, T, head_size)
+        v = self.value(x)  # (B, T, head_size)
+
+        scores = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5   # (B, T, T)
+        # tril은 block_size 크기라서, 실제 입력 길이 T만큼만 잘라 씀
+        scores = scores.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+        att = F.softmax(scores, dim=-1)                           # (B, T, T)
+        self.att = att
+        return att @ v                                            # (B, T, head_size)
 
 class BigramLM(nn.Module):
     def __init__(self, vocab_size: int):
