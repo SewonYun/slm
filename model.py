@@ -28,6 +28,61 @@ class Head(nn.Module):
         self.att = att
         return att @ v                                            # (B, T, head_size)
 
+class MultiHeadAttention(nn.Module):
+    def __init__(self, n_embd: int, n_head: int, block_size: int, dropout: float = 0.0):
+        super().__init__()
+        # 32차원을 head 4개가 8차원씩 나눠 가짐 -> 이어 붙이면 다시 32
+        # 그래서 head를 늘려도 계산량은 head 1개(32차원)일 때와 비슷해
+        assert n_embd % n_head == 0, "n_embd는 n_head로 나눠떨어져야 함"
+        head_size = n_embd // n_head
+
+        # nn.ModuleList: 모듈 목록. 그냥 파이썬 list에 넣으면 parameters()에 등록이 안 돼서
+        # 옵티마이저가 못 찾고 학습이 안 됨 (조용히 실패하니까 주의)
+        self.heads = nn.ModuleList(
+            [Head(n_embd, head_size, block_size) for _ in range(n_head)]
+        )
+        # 각 head 결과를 이어 붙인 뒤 한 번 섞어 주는 행렬 (출력 프로젝션)
+        self.proj = nn.Linear(n_embd, n_embd)
+        # 학습 때 일부 값을 랜덤으로 0으로 만듦 (과적합 방지). eval()이면 꺼짐
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # 각 head: (B, T, 8) -> 마지막 축으로 이어 붙임 -> (B, T, 32)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        return self.dropout(self.proj(out))  # (B, T, 32)
+
+
+class MLP(nn.Module):
+    def __init__(self, n_embd: int, dropout: float = 0.0):
+        super().__init__()
+        # nn.Sequential: 순서대로 통과시키는 파이프라인
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),  # 32 -> 128로 넓힘
+            nn.GELU(),                      # 비선형 함수 (아래 설명)
+            nn.Linear(4 * n_embd, n_embd),  # 128 -> 32로 다시 좁힘
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        # nn.Linear는 마지막 축(C)에만 작용 -> 토큰끼리 섞이지 않고 토큰마다 따로 계산됨
+        return self.net(x)  # (B, T, 32)
+
+class Block(nn.Module):
+    """Transformer 블록 1개: 소통(attention) + 소화(MLP)"""
+
+    def __init__(self, n_embd: int, n_head: int, block_size: int, dropout: float = 0.0):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.attn = MultiHeadAttention(n_embd, n_head, block_size, dropout)
+        self.ln2 = nn.LayerNorm(n_embd)
+        self.mlp = MLP(n_embd, dropout)
+
+    def forward(self, x):
+        # 문서의 "TODO: 위 그림 그대로 두 줄로"가 이거야
+        x = x + self.attn(self.ln1(x))  # 정규화 -> 토큰끼리 소통 -> 원본에 더함
+        x = x + self.mlp(self.ln2(x))   # 정규화 -> 토큰별 소화   -> 원본에 더함
+        return x                         # (B, T, C) 그대로
+
 class BigramLM(nn.Module):
     def __init__(self, vocab_size: int):
         super().__init__()

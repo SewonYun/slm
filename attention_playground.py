@@ -91,3 +91,15 @@ print("out shape:", out.shape)
 print("0번 조각의 비율표:\n", wei[0].round(decimals=2))
 print("행 합:", wei[0].sum(dim=-1))
 
+# ---- Ch4 파트 1 확인 ----
+from model import MultiHeadAttention, MLP
+
+x = torch.randn(4, 8, 32)
+mha = MultiHeadAttention(n_embd=32, n_head=4, block_size=8)
+mlp = MLP(n_embd=32)
+print("MHA out:", mha(x).shape)
+print("MLP out:", mlp(x).shape)
+print("MHA 파라미터:", sum(p.numel() for p in mha.parameters()))
+print("MLP 파라미터:", sum(p.numel() for p in mlp.parameters()))
+
+
