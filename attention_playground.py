@@ -102,4 +102,19 @@ print("MLP out:", mlp(x).shape)
 print("MHA 파라미터:", sum(p.numel() for p in mha.parameters()))
 print("MLP 파라미터:", sum(p.numel() for p in mlp.parameters()))
 
+# ---- Ch5 파트 1 확인 ----
+from model import GPT, GPTConfig
+
+torch.manual_seed(0)
+gpt = GPT(GPTConfig())
+print("파라미터 수:", sum(p.numel() for p in gpt.parameters()))
+
+idx = torch.randint(0, 65, (4, 8))        # 가짜 입력 (B=4, T=8)
+logits, loss = gpt(idx, idx)
+print("logits:", logits.shape)
+print("초기 loss:", loss.item())
+
+gpt.eval()
+out = gpt.generate(torch.zeros((1, 1), dtype=torch.long), max_new_tokens=20)
+print("generate:", out.shape)
 

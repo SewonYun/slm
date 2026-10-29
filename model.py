@@ -1,4 +1,5 @@
 # model.py
+from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -82,6 +83,75 @@ class Block(nn.Module):
         x = x + self.attn(self.ln1(x))  # 정규화 -> 토큰끼리 소통 -> 원본에 더함
         x = x + self.mlp(self.ln2(x))   # 정규화 -> 토큰별 소화   -> 원본에 더함
         return x                         # (B, T, C) 그대로
+
+@dataclass(frozen=True)  # frozen: 만든 뒤 값 변경 불가 (설정값이 학습 중 바뀌는 사고 방지)
+class GPTConfig:
+    vocab_size: int = 65
+    block_size: int = 128   # 한 번에 보는 최대 토큰 수 (컨텍스트 길이)
+    n_layer: int = 4        # Block 몇 층
+    n_head: int = 4         # Block당 head 수
+    n_embd: int = 128       # 토큰 벡터 차원 (C)
+    dropout: float = 0.1
+
+
+class GPT(nn.Module):
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.config = config
+        c = config
+        self.tok_emb = nn.Embedding(c.vocab_size, c.n_embd)  # (65, 128)  토큰 임베딩 표
+        self.pos_emb = nn.Embedding(c.block_size, c.n_embd)  # (128, 128) 위치 임베딩 표
+        self.drop = nn.Dropout(c.dropout)
+        self.blocks = nn.Sequential(
+            *[Block(c.n_embd, c.n_head, c.block_size, c.dropout) for _ in range(c.n_layer)]
+        )
+        self.ln_f = nn.LayerNorm(c.n_embd)
+        self.lm_head = nn.Linear(c.n_embd, c.vocab_size)       # 128 -> 65 점수
+
+        # 모든 하위 모듈에 _init_weights를 적용
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        # PyTorch 기본 초기화 대신 작은 값(std 0.02)으로 시작
+        # -> 초기 logits가 0 근처라 loss가 4.17 근처에서 출발 (Ch2에서 zeros_로 본 그 효과)
+        # GPT-2/nanoGPT 관례를 따른 값이야
+        if isinstance(m, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(m.weight, mean=0.0, std=0.02)
+        if isinstance(m, nn.Linear) and m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+        assert T <= self.config.block_size, f"T={T}가 block_size보다 큼"
+
+        tok = self.tok_emb(idx)                                    # (B, T, C)
+        # torch.arange(T): [0, 1, ..., T-1] 위치 번호
+        # device=idx.device: 입력과 같은 장치(cpu/mps)에 만들어야 에러 안 남
+        pos = self.pos_emb(torch.arange(T, device=idx.device))     # (T, C)
+        x = self.drop(tok + pos)   # (B,T,C) + (T,C) -> broadcasting으로 모든 조각에 같은 위치 벡터를 더함
+
+        x = self.blocks(x)         # (B, T, C)  Block 4층 통과
+        x = self.ln_f(x)           # (B, T, C)
+        logits = self.lm_head(x)   # (B, T, vocab_size)
+
+        if targets is None:
+            return logits, None
+        # 여기부터는 BigramLM과 완전히 같음
+        B, T, V = logits.shape
+        loss = F.cross_entropy(logits.view(B * T, V), targets.view(B * T))
+        return logits, loss
+
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens: int):
+        for _ in range(max_new_tokens):
+            # 위치 임베딩 표가 block_size(128)칸뿐이라, 그보다 길면 뒤쪽 128개만 잘라서 넣음
+            idx_cond = idx[:, -self.config.block_size:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :]                 # 마지막 위치만 (B, V)
+            probs = F.softmax(logits, dim=-1)
+            nxt = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat([idx, nxt], dim=1)
+        return idx
 
 class BigramLM(nn.Module):
     def __init__(self, vocab_size: int):
